@@ -50,116 +50,6 @@ const INDEX_NAME: &str = "idx";
 const TARGET_CPU: &str = "generic";
 const TAPE_LEN: u64 = 30_000;
 
-type LlvmInitFn = unsafe extern "C" fn();
-
-const LLVM_TARGET_INFO_INITS: &[LlvmInitFn] = &[
-    llvm::LLVMInitializeAArch64TargetInfo,
-    llvm::LLVMInitializeAMDGPUTargetInfo,
-    llvm::LLVMInitializeARMTargetInfo,
-    llvm::LLVMInitializeAVRTargetInfo,
-    llvm::LLVMInitializeBPFTargetInfo,
-    llvm::LLVMInitializeHexagonTargetInfo,
-    llvm::LLVMInitializeLanaiTargetInfo,
-    llvm::LLVMInitializeLoongArchTargetInfo,
-    llvm::LLVMInitializeMipsTargetInfo,
-    llvm::LLVMInitializeMSP430TargetInfo,
-    llvm::LLVMInitializeNVPTXTargetInfo,
-    llvm::LLVMInitializePowerPCTargetInfo,
-    llvm::LLVMInitializeRISCVTargetInfo,
-    llvm::LLVMInitializeSparcTargetInfo,
-    llvm::LLVMInitializeSystemZTargetInfo,
-    llvm::LLVMInitializeVETargetInfo,
-    llvm::LLVMInitializeWebAssemblyTargetInfo,
-    llvm::LLVMInitializeX86TargetInfo,
-    llvm::LLVMInitializeXCoreTargetInfo,
-];
-
-const LLVM_TARGET_INITS: &[LlvmInitFn] = &[
-    llvm::LLVMInitializeAArch64Target,
-    llvm::LLVMInitializeAMDGPUTarget,
-    llvm::LLVMInitializeARMTarget,
-    llvm::LLVMInitializeAVRTarget,
-    llvm::LLVMInitializeBPFTarget,
-    llvm::LLVMInitializeHexagonTarget,
-    llvm::LLVMInitializeLanaiTarget,
-    llvm::LLVMInitializeLoongArchTarget,
-    llvm::LLVMInitializeMipsTarget,
-    llvm::LLVMInitializeMSP430Target,
-    llvm::LLVMInitializeNVPTXTarget,
-    llvm::LLVMInitializePowerPCTarget,
-    llvm::LLVMInitializeRISCVTarget,
-    llvm::LLVMInitializeSparcTarget,
-    llvm::LLVMInitializeSystemZTarget,
-    llvm::LLVMInitializeVETarget,
-    llvm::LLVMInitializeWebAssemblyTarget,
-    llvm::LLVMInitializeX86Target,
-    llvm::LLVMInitializeXCoreTarget,
-];
-
-const LLVM_TARGET_MC_INITS: &[LlvmInitFn] = &[
-    llvm::LLVMInitializeAArch64TargetMC,
-    llvm::LLVMInitializeAMDGPUTargetMC,
-    llvm::LLVMInitializeARMTargetMC,
-    llvm::LLVMInitializeAVRTargetMC,
-    llvm::LLVMInitializeBPFTargetMC,
-    llvm::LLVMInitializeHexagonTargetMC,
-    llvm::LLVMInitializeLanaiTargetMC,
-    llvm::LLVMInitializeLoongArchTargetMC,
-    llvm::LLVMInitializeMipsTargetMC,
-    llvm::LLVMInitializeMSP430TargetMC,
-    llvm::LLVMInitializeNVPTXTargetMC,
-    llvm::LLVMInitializePowerPCTargetMC,
-    llvm::LLVMInitializeRISCVTargetMC,
-    llvm::LLVMInitializeSparcTargetMC,
-    llvm::LLVMInitializeSystemZTargetMC,
-    llvm::LLVMInitializeVETargetMC,
-    llvm::LLVMInitializeWebAssemblyTargetMC,
-    llvm::LLVMInitializeX86TargetMC,
-    llvm::LLVMInitializeXCoreTargetMC,
-];
-
-const LLVM_ASM_PRINTER_INITS: &[LlvmInitFn] = &[
-    llvm::LLVMInitializeAArch64AsmPrinter,
-    llvm::LLVMInitializeAMDGPUAsmPrinter,
-    llvm::LLVMInitializeARMAsmPrinter,
-    llvm::LLVMInitializeAVRAsmPrinter,
-    llvm::LLVMInitializeBPFAsmPrinter,
-    llvm::LLVMInitializeHexagonAsmPrinter,
-    llvm::LLVMInitializeLanaiAsmPrinter,
-    llvm::LLVMInitializeLoongArchAsmPrinter,
-    llvm::LLVMInitializeMipsAsmPrinter,
-    llvm::LLVMInitializeMSP430AsmPrinter,
-    llvm::LLVMInitializeNVPTXAsmPrinter,
-    llvm::LLVMInitializePowerPCAsmPrinter,
-    llvm::LLVMInitializeRISCVAsmPrinter,
-    llvm::LLVMInitializeSparcAsmPrinter,
-    llvm::LLVMInitializeSystemZAsmPrinter,
-    llvm::LLVMInitializeVEAsmPrinter,
-    llvm::LLVMInitializeWebAssemblyAsmPrinter,
-    llvm::LLVMInitializeX86AsmPrinter,
-    llvm::LLVMInitializeXCoreAsmPrinter,
-];
-
-const LLVM_ASM_PARSER_INITS: &[LlvmInitFn] = &[
-    llvm::LLVMInitializeAArch64AsmParser,
-    llvm::LLVMInitializeAMDGPUAsmParser,
-    llvm::LLVMInitializeARMAsmParser,
-    llvm::LLVMInitializeAVRAsmParser,
-    llvm::LLVMInitializeBPFAsmParser,
-    llvm::LLVMInitializeHexagonAsmParser,
-    llvm::LLVMInitializeLanaiAsmParser,
-    llvm::LLVMInitializeLoongArchAsmParser,
-    llvm::LLVMInitializeMipsAsmParser,
-    llvm::LLVMInitializeMSP430AsmParser,
-    llvm::LLVMInitializePowerPCAsmParser,
-    llvm::LLVMInitializeRISCVAsmParser,
-    llvm::LLVMInitializeSparcAsmParser,
-    llvm::LLVMInitializeSystemZAsmParser,
-    llvm::LLVMInitializeVEAsmParser,
-    llvm::LLVMInitializeWebAssemblyAsmParser,
-    llvm::LLVMInitializeX86AsmParser,
-];
-
 fn cstring(s: &str) -> Result<CString> {
     CString::new(s).map_err(|_| anyhow!("string contains interior NUL: {s:?}"))
 }
@@ -238,21 +128,11 @@ unsafe fn llvm_error_to_string(err: *mut c_char) -> String {
 }
 
 unsafe fn initialize_llvm_targets() {
-    for init in LLVM_TARGET_INFO_INITS {
-        init();
-    }
-    for init in LLVM_TARGET_INITS {
-        init();
-    }
-    for init in LLVM_TARGET_MC_INITS {
-        init();
-    }
-    for init in LLVM_ASM_PRINTER_INITS {
-        init();
-    }
-    for init in LLVM_ASM_PARSER_INITS {
-        init();
-    }
+    llvm::LLVMInitializeAllTargetInfosShim();
+    llvm::LLVMInitializeAllTargetsShim();
+    llvm::LLVMInitializeAllTargetMCsShim();
+    llvm::LLVMInitializeAllAsmPrintersShim();
+    llvm::LLVMInitializeAllAsmParsersShim();
 }
 
 fn compile_to_object(ops: &[Op], object_path: &Path) -> Result<()> {

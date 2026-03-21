@@ -47,6 +47,7 @@ fn run_llvm_config(llvm_config: &Path, arg: &str) -> anyhow::Result<String> {
 
 fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed=wrapper.h");
+    println!("cargo:rerun-if-changed=llvm_init_shim.c");
 
     let llvm_config = find_llvm_config()?;
     println!("cargo:rerun-if-env-changed=LLVM_CONFIG_PATH");
@@ -69,6 +70,34 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let out_path = PathBuf::from(env::var("OUT_DIR")?);
+    let shim_obj = out_path.join("llvm_init_shim.o");
+    let shim_lib = out_path.join("libllvm_init_shim.a");
+
+    let compile_status = Command::new("cc")
+        .arg("-c")
+        .arg("llvm_init_shim.c")
+        .arg("-I")
+        .arg(&include_dir)
+        .arg("-o")
+        .arg(&shim_obj)
+        .status()?;
+    if !compile_status.success() {
+        anyhow::bail!("failed to compile llvm_init_shim.c");
+    }
+
+    let archive_status = Command::new("ar")
+        .arg("crus")
+        .arg(&shim_lib)
+        .arg(&shim_obj)
+        .status()?;
+    if !archive_status.success() {
+        anyhow::bail!("failed to archive llvm_init_shim.o");
+    }
+
+    println!("cargo:rustc-link-search=native={}", out_path.display());
+    println!("cargo:rustc-link-lib=static=llvm_init_shim");
+
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
         .clang_arg(format!("-I{include_dir}"))
@@ -78,8 +107,6 @@ fn main() -> anyhow::Result<()> {
         .generate_comments(false)
         .generate()
         .map_err(|_| anyhow::anyhow!("failed to generate LLVM bindings"))?;
-
-    let out_path = PathBuf::from(env::var("OUT_DIR")?);
     bindings.write_to_file(out_path.join("llvm_bindings.rs"))?;
 
     Ok(())
