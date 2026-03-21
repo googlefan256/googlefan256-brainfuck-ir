@@ -156,25 +156,23 @@ struct LLVMCompiler {
 }
 
 impl LLVMCompiler {
-    pub fn new() -> Result<Self> {
-        unsafe {
-            initialize_llvm_targets();
+    pub unsafe fn new() -> Result<Self> {
+        initialize_llvm_targets();
 
-            let context = llvm::LLVMContextCreate();
-            if context.is_null() {
-                bail!("failed to create LLVM context");
-            }
-
-            let module_name = cstring(MODULE_NAME)?;
-            let module = llvm::LLVMModuleCreateWithNameInContext(module_name.as_ptr(), context);
-            let builder = llvm::LLVMCreateBuilderInContext(context);
-
-            Ok(Self {
-                context,
-                module,
-                builder,
-            })
+        let context = llvm::LLVMContextCreate();
+        if context.is_null() {
+            bail!("failed to create LLVM context");
         }
+
+        let module_name = cstring(MODULE_NAME)?;
+        let module = llvm::LLVMModuleCreateWithNameInContext(module_name.as_ptr(), context);
+        let builder = llvm::LLVMCreateBuilderInContext(context);
+
+        Ok(Self {
+            context,
+            module,
+            builder,
+        })
     }
     pub unsafe fn build(&self, ops: &[Op]) -> Result<()> {
         let i8_ty = llvm::LLVMInt8TypeInContext(self.context);
@@ -424,28 +422,26 @@ struct LLVMTargetMachine {
 }
 
 impl LLVMTargetMachine {
-    pub fn new(
+    pub unsafe fn new(
         target: llvm::LLVMTargetRef,
         triple: *mut c_char,
         cpu: *mut c_char,
         features: *mut c_char,
         opt_level: llvm::LLVMCodeGenOptLevel,
     ) -> Result<Self> {
-        unsafe {
-            let tm = llvm::LLVMCreateTargetMachine(
-                target,
-                triple,
-                cpu,
-                features,
-                opt_level,
-                llvm::LLVMRelocMode_LLVMRelocDefault,
-                llvm::LLVMCodeModel_LLVMCodeModelDefault,
-            );
-            if tm.is_null() {
-                bail!("failed to create target machine");
-            }
-            Ok(Self { tm })
+        let tm = llvm::LLVMCreateTargetMachine(
+            target,
+            triple,
+            cpu,
+            features,
+            opt_level,
+            llvm::LLVMRelocMode_LLVMRelocDefault,
+            llvm::LLVMCodeModel_LLVMCodeModelDefault,
+        );
+        if tm.is_null() {
+            bail!("failed to create target machine");
         }
+        Ok(Self { tm })
     }
 }
 
@@ -477,54 +473,52 @@ impl Drop for LLVMTriple {
     }
 }
 
-fn compile_to_object(ops: &[Op], object_path: &Path, opt_level: &OptLevel) -> Result<()> {
+unsafe fn compile_to_object(ops: &[Op], object_path: &Path, opt_level: &OptLevel) -> Result<()> {
     let compiler = LLVMCompiler::new()?;
-    unsafe {
-        compiler.build(ops)?;
-        let triple = LLVMTriple::new();
+    compiler.build(ops)?;
+    let triple = LLVMTriple::new();
 
-        let mut target = std::ptr::null_mut();
-        let mut target_err = std::ptr::null_mut();
-        if llvm::LLVMGetTargetFromTriple(triple.triple, &mut target, &mut target_err) != 0 {
-            let msg = llvm_error_to_string(target_err);
-            llvm::LLVMDisposeMessage(triple.triple);
-            bail!("failed to get target from triple: {msg}");
-        }
-        let level = match opt_level {
-            OptLevel::O0 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelNone,
-            OptLevel::O1 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelLess,
-            OptLevel::O2 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelDefault,
-            OptLevel::O3 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelAggressive,
-        };
-        let tm = LLVMTargetMachine::new(
-            target,
-            triple.triple,
-            cstring(TARGET_CPU)?.as_ptr() as *mut _,
-            cstring("")?.as_ptr() as *mut _,
-            level,
-        )?;
+    let mut target = std::ptr::null_mut();
+    let mut target_err = std::ptr::null_mut();
+    if llvm::LLVMGetTargetFromTriple(triple.triple, &mut target, &mut target_err) != 0 {
+        let msg = llvm_error_to_string(target_err);
+        llvm::LLVMDisposeMessage(triple.triple);
+        bail!("failed to get target from triple: {msg}");
+    }
+    let level = match opt_level {
+        OptLevel::O0 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelNone,
+        OptLevel::O1 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelLess,
+        OptLevel::O2 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelDefault,
+        OptLevel::O3 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelAggressive,
+    };
+    let tm = LLVMTargetMachine::new(
+        target,
+        triple.triple,
+        cstring(TARGET_CPU)?.as_ptr() as *mut _,
+        cstring("")?.as_ptr() as *mut _,
+        level,
+    )?;
 
-        llvm::LLVMSetTarget(compiler.module, triple.triple);
+    llvm::LLVMSetTarget(compiler.module, triple.triple);
 
-        let data_layout = llvm::LLVMCreateTargetDataLayout(tm.tm);
-        let layout_str = llvm::LLVMCopyStringRepOfTargetData(data_layout);
-        llvm::LLVMSetDataLayout(compiler.module, layout_str);
-        llvm::LLVMDisposeMessage(layout_str);
-        llvm::LLVMDisposeTargetData(data_layout);
+    let data_layout = llvm::LLVMCreateTargetDataLayout(tm.tm);
+    let layout_str = llvm::LLVMCopyStringRepOfTargetData(data_layout);
+    llvm::LLVMSetDataLayout(compiler.module, layout_str);
+    llvm::LLVMDisposeMessage(layout_str);
+    llvm::LLVMDisposeTargetData(data_layout);
 
-        let mut emit_err = std::ptr::null_mut();
-        let object_c = cstring(&object_path.to_string_lossy())?;
-        if llvm::LLVMTargetMachineEmitToFile(
-            tm.tm,
-            compiler.module,
-            object_c.as_ptr().cast_mut(),
-            llvm::LLVMCodeGenFileType_LLVMObjectFile,
-            &mut emit_err,
-        ) != 0
-        {
-            let msg = llvm_error_to_string(emit_err);
-            bail!("failed to emit object file: {msg}");
-        }
+    let mut emit_err = std::ptr::null_mut();
+    let object_c = cstring(&object_path.to_string_lossy())?;
+    if llvm::LLVMTargetMachineEmitToFile(
+        tm.tm,
+        compiler.module,
+        object_c.as_ptr().cast_mut(),
+        llvm::LLVMCodeGenFileType_LLVMObjectFile,
+        &mut emit_err,
+    ) != 0
+    {
+        let msg = llvm_error_to_string(emit_err);
+        bail!("failed to emit object file: {msg}");
     }
 
     Ok(())
@@ -560,7 +554,7 @@ fn main() -> Result<()> {
 
     let object_path = cli.output.with_extension("o");
     let opt = cli.opt.unwrap_or(OptLevel::O0);
-    compile_to_object(&ops, &object_path, &opt)?;
+    unsafe { compile_to_object(&ops, &object_path, &opt)? };
     link_executable(&object_path, &cli.output, &opt)?;
 
     if !cli.keep_obj {
