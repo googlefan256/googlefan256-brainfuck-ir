@@ -24,10 +24,6 @@ enum OptLevel {
     O2,
     #[value(name = "3")]
     O3,
-    #[value(name = "s")]
-    Os,
-    #[value(name = "z")]
-    Oz,
 }
 
 #[derive(Parser)]
@@ -499,8 +495,6 @@ fn compile_to_object(ops: &[Op], object_path: &Path, opt_level: &OptLevel) -> Re
             OptLevel::O1 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelLess,
             OptLevel::O2 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelDefault,
             OptLevel::O3 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelAggressive,
-            OptLevel::Os => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelAggressive,
-            OptLevel::Oz => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelAggressive,
         };
         let tm = LLVMTargetMachine::new(
             target,
@@ -546,8 +540,6 @@ fn link_executable(object_path: &Path, output_path: &Path, opt_level: &OptLevel)
             OptLevel::O1 => "-O1",
             OptLevel::O2 => "-O2",
             OptLevel::O3 => "-O3",
-            OptLevel::Os => "-Os",
-            OptLevel::Oz => "-Oz",
         })
         .status()
         .context("failed to invoke system C compiler (cc)")?;
