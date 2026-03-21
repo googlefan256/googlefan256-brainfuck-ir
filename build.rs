@@ -45,9 +45,12 @@ fn run_llvm_config(llvm_config: &Path, arg: &str) -> anyhow::Result<String> {
     Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
 
+static LLVM_WRAPPER: &str = "./llvm/wrapper.h";
+static LLVM_INIT_SHIM: &str = "./llvm/llvm_init_shim.c";
+
 fn main() -> anyhow::Result<()> {
-    println!("cargo:rerun-if-changed=wrapper.h");
-    println!("cargo:rerun-if-changed=llvm_init_shim.c");
+    println!("cargo:rerun-if-changed={}", LLVM_WRAPPER);
+    println!("cargo:rerun-if-changed={}", LLVM_INIT_SHIM);
 
     let llvm_config = find_llvm_config()?;
     println!("cargo:rerun-if-env-changed=LLVM_CONFIG_PATH");
@@ -71,35 +74,17 @@ fn main() -> anyhow::Result<()> {
     }
 
     let out_path = PathBuf::from(env::var("OUT_DIR")?);
-    let shim_obj = out_path.join("llvm_init_shim.o");
-    let shim_lib = out_path.join("libllvm_init_shim.a");
-
-    let compile_status = Command::new("cc")
-        .arg("-c")
-        .arg("llvm_init_shim.c")
-        .arg("-I")
-        .arg(&include_dir)
-        .arg("-o")
-        .arg(&shim_obj)
-        .status()?;
-    if !compile_status.success() {
-        anyhow::bail!("failed to compile llvm_init_shim.c");
-    }
-
-    let archive_status = Command::new("ar")
-        .arg("crus")
-        .arg(&shim_lib)
-        .arg(&shim_obj)
-        .status()?;
-    if !archive_status.success() {
-        anyhow::bail!("failed to archive llvm_init_shim.o");
-    }
+    cc::Build::new()
+        .file(LLVM_INIT_SHIM)
+        .include(&include_dir)
+        .out_dir(&out_path)
+        .compile("llvm_init_shim");
 
     println!("cargo:rustc-link-search=native={}", out_path.display());
     println!("cargo:rustc-link-lib=static=llvm_init_shim");
 
     let bindings = bindgen::Builder::default()
-        .header("wrapper.h")
+        .header(LLVM_WRAPPER)
         .clang_arg(format!("-I{include_dir}"))
         .allowlist_function("LLVM.*")
         .allowlist_type("LLVM.*")

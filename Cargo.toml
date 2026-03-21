@@ -9,5 +9,8 @@ clap = { version = "4", features = ["derive"] }
 
 [build-dependencies]
 anyhow = "1"
-bindgen = "0.69"
+bindgen = "0.72.1"
+cc = "1.2.57"
 
+[profile.release]
+strip = true
