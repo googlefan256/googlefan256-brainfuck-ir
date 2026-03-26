@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::os::raw::c_char;
@@ -14,7 +15,7 @@ mod llvm {
     include!(concat!(env!("OUT_DIR"), "/llvm_bindings.rs"));
 }
 
-#[derive(Clone, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum OptLevel {
     #[value(name = "0")]
     O0,
@@ -24,6 +25,35 @@ enum OptLevel {
     O2,
     #[value(name = "3")]
     O3,
+}
+
+impl OptLevel {
+    fn llvm_codegen_level(self) -> llvm::LLVMCodeGenOptLevel {
+        match self {
+            Self::O0 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelNone,
+            Self::O1 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelLess,
+            Self::O2 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelDefault,
+            Self::O3 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelAggressive,
+        }
+    }
+
+    fn llvm_pass_pipeline(self) -> &'static str {
+        match self {
+            Self::O0 => "default<O0>",
+            Self::O1 => "default<O1>",
+            Self::O2 => "default<O2>",
+            Self::O3 => "default<O3>",
+        }
+    }
+
+    fn cc_opt_flag(self) -> &'static str {
+        match self {
+            Self::O0 => "-O0",
+            Self::O1 => "-O1",
+            Self::O2 => "-O2",
+            Self::O3 => "-O3",
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -44,10 +74,18 @@ struct Cli {
     opt: Option<OptLevel>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
+struct CellUpdate {
+    offset: i64,
+    factor: i32,
+}
+
+#[derive(Clone, Debug)]
 enum Op {
     PtrAdd(i64),
     CellAdd(i32),
+    ClearCell,
+    AddScaled(Vec<CellUpdate>),
     Output,
     Input,
     LoopStart,
@@ -70,66 +108,198 @@ fn cstring(s: &str) -> Result<CString> {
 
 fn parse_brainfuck(source: &str) -> Result<Vec<Op>> {
     let mut ops = Vec::new();
-    let mut chars = source.chars().peekable();
-    let mut stack = Vec::new();
+    let mut chars = source.as_bytes().iter().copied().peekable();
+    let mut loop_depth = 0usize;
 
     while let Some(ch) = chars.next() {
         match ch {
-            '>' | '<' => {
-                let mut delta: i64 = if ch == '>' { 1 } else { -1 };
+            b'>' | b'<' => {
+                let mut delta: i64 = if ch == b'>' { 1 } else { -1 };
                 while let Some(next) = chars.peek() {
-                    if *next == '>' {
+                    if *next == b'>' {
                         delta += 1;
                         chars.next();
-                    } else if *next == '<' {
+                    } else if *next == b'<' {
                         delta -= 1;
                         chars.next();
                     } else {
                         break;
                     }
                 }
-                if delta != 0 {
-                    ops.push(Op::PtrAdd(delta));
-                }
+                push_op(&mut ops, Op::PtrAdd(delta));
             }
-            '+' | '-' => {
-                let mut delta: i32 = if ch == '+' { 1 } else { -1 };
+            b'+' | b'-' => {
+                let mut delta: i32 = if ch == b'+' { 1 } else { -1 };
                 while let Some(next) = chars.peek() {
-                    if *next == '+' {
+                    if *next == b'+' {
                         delta += 1;
                         chars.next();
-                    } else if *next == '-' {
+                    } else if *next == b'-' {
                         delta -= 1;
                         chars.next();
                     } else {
                         break;
                     }
                 }
-                if delta != 0 {
-                    ops.push(Op::CellAdd(delta));
-                }
+                push_op(&mut ops, Op::CellAdd(delta));
             }
-            '.' => ops.push(Op::Output),
-            ',' => ops.push(Op::Input),
-            '[' => {
-                stack.push(ops.len());
+            b'.' => ops.push(Op::Output),
+            b',' => ops.push(Op::Input),
+            b'[' => {
+                loop_depth += 1;
                 ops.push(Op::LoopStart);
             }
-            ']' => {
-                if stack.pop().is_none() {
+            b']' => {
+                if loop_depth == 0 {
                     bail!("unmatched closing bracket ']' found");
                 }
+                loop_depth -= 1;
                 ops.push(Op::LoopEnd);
             }
             _ => {}
         }
     }
 
-    if !stack.is_empty() {
+    if loop_depth != 0 {
         bail!("unmatched opening bracket '[' found");
     }
 
-    Ok(ops)
+    optimize_ops(&ops)
+}
+
+fn push_op(ops: &mut Vec<Op>, op: Op) {
+    match op {
+        Op::PtrAdd(0) | Op::CellAdd(0) => {}
+        Op::PtrAdd(delta) => {
+            if let Some(Op::PtrAdd(prev)) = ops.last_mut() {
+                *prev += delta;
+                if *prev == 0 {
+                    ops.pop();
+                }
+            } else {
+                ops.push(Op::PtrAdd(delta));
+            }
+        }
+        Op::CellAdd(delta) => {
+            if let Some(Op::CellAdd(prev)) = ops.last_mut() {
+                *prev += delta;
+                if *prev == 0 {
+                    ops.pop();
+                }
+            } else {
+                ops.push(Op::CellAdd(delta));
+            }
+        }
+        other => ops.push(other),
+    }
+}
+
+fn optimize_ops(ops: &[Op]) -> Result<Vec<Op>> {
+    let loop_pairs = compute_loop_pairs(ops)?;
+    optimize_range(ops, &loop_pairs, 0, ops.len())
+}
+
+fn compute_loop_pairs(ops: &[Op]) -> Result<Vec<usize>> {
+    let mut loop_pairs = vec![usize::MAX; ops.len()];
+    let mut stack = Vec::new();
+
+    for (index, op) in ops.iter().enumerate() {
+        match op {
+            Op::LoopStart => stack.push(index),
+            Op::LoopEnd => {
+                let start = stack
+                    .pop()
+                    .ok_or_else(|| anyhow!("internal unmatched closing bracket"))?;
+                loop_pairs[start] = index;
+                loop_pairs[index] = start;
+            }
+            _ => {}
+        }
+    }
+
+    if !stack.is_empty() {
+        bail!("internal unmatched opening bracket");
+    }
+
+    Ok(loop_pairs)
+}
+
+fn optimize_range(ops: &[Op], loop_pairs: &[usize], start: usize, end: usize) -> Result<Vec<Op>> {
+    let mut optimized = Vec::new();
+    let mut index = start;
+
+    while index < end {
+        match &ops[index] {
+            Op::LoopStart => {
+                let loop_end = loop_pairs[index];
+                let body = optimize_range(ops, loop_pairs, index + 1, loop_end)?;
+                if let Some(op) = try_optimize_loop(&body) {
+                    push_op(&mut optimized, op);
+                } else {
+                    optimized.push(Op::LoopStart);
+                    optimized.extend(body);
+                    optimized.push(Op::LoopEnd);
+                }
+                index = loop_end + 1;
+            }
+            Op::LoopEnd => bail!("internal unexpected loop terminator"),
+            other => {
+                push_op(&mut optimized, other.clone());
+                index += 1;
+            }
+        }
+    }
+
+    Ok(optimized)
+}
+
+fn try_optimize_loop(body: &[Op]) -> Option<Op> {
+    try_optimize_clear_loop(body).or_else(|| try_optimize_add_scaled_loop(body))
+}
+
+fn try_optimize_clear_loop(body: &[Op]) -> Option<Op> {
+    match body {
+        [Op::CellAdd(delta)] if delta.rem_euclid(2) != 0 => Some(Op::ClearCell),
+        _ => None,
+    }
+}
+
+fn try_optimize_add_scaled_loop(body: &[Op]) -> Option<Op> {
+    let mut pointer_offset = 0i64;
+    let mut current_delta = 0i32;
+    let mut updates = BTreeMap::new();
+
+    for op in body {
+        match op {
+            Op::PtrAdd(delta) => pointer_offset += delta,
+            Op::CellAdd(delta) => {
+                if pointer_offset == 0 {
+                    current_delta += delta;
+                } else {
+                    *updates.entry(pointer_offset).or_insert(0) += delta;
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    if pointer_offset != 0 || current_delta.rem_euclid(256) != 255 {
+        return None;
+    }
+
+    let updates: Vec<_> = updates
+        .into_iter()
+        .filter_map(|(offset, factor)| {
+            let wrapped = factor.rem_euclid(256);
+            (wrapped != 0).then_some(CellUpdate { offset, factor })
+        })
+        .collect();
+
+    if updates.is_empty() {
+        Some(Op::ClearCell)
+    } else {
+        Some(Op::AddScaled(updates))
+    }
 }
 
 unsafe fn llvm_error_to_string(err: *mut c_char) -> String {
@@ -139,6 +309,16 @@ unsafe fn llvm_error_to_string(err: *mut c_char) -> String {
     let msg = CStr::from_ptr(err).to_string_lossy().to_string();
     llvm::LLVMDisposeMessage(err);
     msg
+}
+
+unsafe fn llvm_error_ref_to_string(err: llvm::LLVMErrorRef) -> String {
+    if err.is_null() {
+        return "unknown LLVM error".to_string();
+    }
+    let msg = llvm::LLVMGetErrorMessage(err);
+    let text = CStr::from_ptr(msg).to_string_lossy().to_string();
+    llvm::LLVMDisposeErrorMessage(msg);
+    text
 }
 
 unsafe fn initialize_llvm_targets() {
@@ -174,6 +354,41 @@ impl LLVMCompiler {
             builder,
         })
     }
+
+    unsafe fn build_cell_ptr(
+        &self,
+        tape_ty: llvm::LLVMTypeRef,
+        tape: llvm::LLVMValueRef,
+        idx: llvm::LLVMValueRef,
+        zero_i64: llvm::LLVMValueRef,
+        name: &str,
+    ) -> Result<llvm::LLVMValueRef> {
+        Ok(llvm::LLVMBuildInBoundsGEP2(
+            self.builder,
+            tape_ty,
+            tape,
+            [zero_i64, idx].as_ptr().cast_mut(),
+            2,
+            cstring(name)?.as_ptr(),
+        ))
+    }
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn build_current_cell_ptr(
+        &self,
+        tape_ty: llvm::LLVMTypeRef,
+        tape: llvm::LLVMValueRef,
+        idx_ptr: llvm::LLVMValueRef,
+        i64_ty: llvm::LLVMTypeRef,
+        zero_i64: llvm::LLVMValueRef,
+        idx_name: &str,
+        ptr_name: &str,
+    ) -> Result<(llvm::LLVMValueRef, llvm::LLVMValueRef)> {
+        let cur_idx =
+            llvm::LLVMBuildLoad2(self.builder, i64_ty, idx_ptr, cstring(idx_name)?.as_ptr());
+        let cell_ptr = self.build_cell_ptr(tape_ty, tape, cur_idx, zero_i64, ptr_name)?;
+        Ok((cur_idx, cell_ptr))
+    }
+
     pub unsafe fn build(&self, ops: &[Op]) -> Result<()> {
         let i8_ty = llvm::LLVMInt8TypeInContext(self.context);
         let i32_ty = llvm::LLVMInt32TypeInContext(self.context);
@@ -212,7 +427,7 @@ impl LLVMCompiler {
         let mut loop_stack: Vec<(llvm::LLVMBasicBlockRef, llvm::LLVMBasicBlockRef)> = Vec::new();
 
         for op in ops {
-            match *op {
+            match op {
                 Op::PtrAdd(delta) => {
                     let cur = llvm::LLVMBuildLoad2(
                         self.builder,
@@ -221,7 +436,7 @@ impl LLVMCompiler {
                         cstring("idx.cur")?.as_ptr(),
                     );
                     let val = llvm::LLVMConstInt(i64_ty, delta.unsigned_abs(), 0);
-                    let next = if delta >= 0 {
+                    let next = if *delta >= 0 {
                         llvm::LLVMBuildAdd(self.builder, cur, val, cstring("idx.add")?.as_ptr())
                     } else {
                         llvm::LLVMBuildSub(self.builder, cur, val, cstring("idx.sub")?.as_ptr())
@@ -229,20 +444,9 @@ impl LLVMCompiler {
                     llvm::LLVMBuildStore(self.builder, next, idx_ptr);
                 }
                 Op::CellAdd(delta) => {
-                    let cur_idx = llvm::LLVMBuildLoad2(
-                        self.builder,
-                        i64_ty,
-                        idx_ptr,
-                        cstring("idx.load")?.as_ptr(),
-                    );
-                    let cell_ptr = llvm::LLVMBuildInBoundsGEP2(
-                        self.builder,
-                        tape_ty,
-                        tape,
-                        [zero_i64, cur_idx].as_ptr().cast_mut(),
-                        2,
-                        cstring("cell.ptr")?.as_ptr(),
-                    );
+                    let (_, cell_ptr) = self.build_current_cell_ptr(
+                        tape_ty, tape, idx_ptr, i64_ty, zero_i64, "idx.load", "cell.ptr",
+                    )?;
                     let cur_val = llvm::LLVMBuildLoad2(
                         self.builder,
                         i8_ty,
@@ -250,7 +454,7 @@ impl LLVMCompiler {
                         cstring("cell.cur")?.as_ptr(),
                     );
                     let delta_val =
-                        llvm::LLVMConstInt(i8_ty, (delta as i64).rem_euclid(256) as u64, 0);
+                        llvm::LLVMConstInt(i8_ty, (*delta as i64).rem_euclid(256) as u64, 0);
                     let next = llvm::LLVMBuildAdd(
                         self.builder,
                         cur_val,
@@ -259,21 +463,79 @@ impl LLVMCompiler {
                     );
                     llvm::LLVMBuildStore(self.builder, next, cell_ptr);
                 }
+                Op::ClearCell => {
+                    let (_, cell_ptr) = self.build_current_cell_ptr(
+                        tape_ty, tape, idx_ptr, i64_ty, zero_i64, "idx.load", "cell.ptr",
+                    )?;
+                    llvm::LLVMBuildStore(self.builder, llvm::LLVMConstInt(i8_ty, 0, 0), cell_ptr);
+                }
+                Op::AddScaled(updates) => {
+                    let (cur_idx, cell_ptr) = self.build_current_cell_ptr(
+                        tape_ty, tape, idx_ptr, i64_ty, zero_i64, "idx.load", "cell.ptr",
+                    )?;
+                    let cell = llvm::LLVMBuildLoad2(
+                        self.builder,
+                        i8_ty,
+                        cell_ptr,
+                        cstring("cell.mul")?.as_ptr(),
+                    );
+
+                    for update in updates {
+                        let offset = llvm::LLVMConstInt(i64_ty, update.offset.unsigned_abs(), 0);
+                        let target_idx = if update.offset >= 0 {
+                            llvm::LLVMBuildAdd(
+                                self.builder,
+                                cur_idx,
+                                offset,
+                                cstring("idx.scaled.add")?.as_ptr(),
+                            )
+                        } else {
+                            llvm::LLVMBuildSub(
+                                self.builder,
+                                cur_idx,
+                                offset,
+                                cstring("idx.scaled.sub")?.as_ptr(),
+                            )
+                        };
+                        let target_ptr = self.build_cell_ptr(
+                            tape_ty,
+                            tape,
+                            target_idx,
+                            zero_i64,
+                            "cell.scaled.ptr",
+                        )?;
+                        let target = llvm::LLVMBuildLoad2(
+                            self.builder,
+                            i8_ty,
+                            target_ptr,
+                            cstring("cell.scaled.cur")?.as_ptr(),
+                        );
+                        let scale = llvm::LLVMConstInt(
+                            i8_ty,
+                            (update.factor as i64).rem_euclid(256) as u64,
+                            0,
+                        );
+                        let scaled = llvm::LLVMBuildMul(
+                            self.builder,
+                            cell,
+                            scale,
+                            cstring("cell.scaled.mul")?.as_ptr(),
+                        );
+                        let next = llvm::LLVMBuildAdd(
+                            self.builder,
+                            target,
+                            scaled,
+                            cstring("cell.scaled.next")?.as_ptr(),
+                        );
+                        llvm::LLVMBuildStore(self.builder, next, target_ptr);
+                    }
+
+                    llvm::LLVMBuildStore(self.builder, llvm::LLVMConstInt(i8_ty, 0, 0), cell_ptr);
+                }
                 Op::Output => {
-                    let cur_idx = llvm::LLVMBuildLoad2(
-                        self.builder,
-                        i64_ty,
-                        idx_ptr,
-                        cstring("idx.load")?.as_ptr(),
-                    );
-                    let cell_ptr = llvm::LLVMBuildInBoundsGEP2(
-                        self.builder,
-                        tape_ty,
-                        tape,
-                        [zero_i64, cur_idx].as_ptr().cast_mut(),
-                        2,
-                        cstring("cell.ptr")?.as_ptr(),
-                    );
+                    let (_, cell_ptr) = self.build_current_cell_ptr(
+                        tape_ty, tape, idx_ptr, i64_ty, zero_i64, "idx.load", "cell.ptr",
+                    )?;
                     let cell = llvm::LLVMBuildLoad2(
                         self.builder,
                         i8_ty,
@@ -310,20 +572,9 @@ impl LLVMCompiler {
                         i8_ty,
                         cstring("in.byte")?.as_ptr(),
                     );
-                    let cur_idx = llvm::LLVMBuildLoad2(
-                        self.builder,
-                        i64_ty,
-                        idx_ptr,
-                        cstring("idx.load")?.as_ptr(),
-                    );
-                    let cell_ptr = llvm::LLVMBuildInBoundsGEP2(
-                        self.builder,
-                        tape_ty,
-                        tape,
-                        [zero_i64, cur_idx].as_ptr().cast_mut(),
-                        2,
-                        cstring("cell.ptr")?.as_ptr(),
-                    );
+                    let (_, cell_ptr) = self.build_current_cell_ptr(
+                        tape_ty, tape, idx_ptr, i64_ty, zero_i64, "idx.load", "cell.ptr",
+                    )?;
                     llvm::LLVMBuildStore(self.builder, byte, cell_ptr);
                 }
                 Op::LoopStart => {
@@ -346,20 +597,9 @@ impl LLVMCompiler {
                     llvm::LLVMBuildBr(self.builder, cond_bb);
                     llvm::LLVMPositionBuilderAtEnd(self.builder, cond_bb);
 
-                    let cur_idx = llvm::LLVMBuildLoad2(
-                        self.builder,
-                        i64_ty,
-                        idx_ptr,
-                        cstring("idx.loop")?.as_ptr(),
-                    );
-                    let cell_ptr = llvm::LLVMBuildInBoundsGEP2(
-                        self.builder,
-                        tape_ty,
-                        tape,
-                        [zero_i64, cur_idx].as_ptr().cast_mut(),
-                        2,
-                        cstring("cell.ptr")?.as_ptr(),
-                    );
+                    let (_, cell_ptr) = self.build_current_cell_ptr(
+                        tape_ty, tape, idx_ptr, i64_ty, zero_i64, "idx.loop", "cell.ptr",
+                    )?;
                     let cell = llvm::LLVMBuildLoad2(
                         self.builder,
                         i8_ty,
@@ -473,6 +713,30 @@ impl Drop for LLVMTriple {
     }
 }
 
+unsafe fn run_llvm_passes(
+    module: llvm::LLVMModuleRef,
+    target_machine: llvm::LLVMTargetMachineRef,
+    opt_level: OptLevel,
+) -> Result<()> {
+    let pass_pipeline = cstring(opt_level.llvm_pass_pipeline())?;
+    let options = llvm::LLVMCreatePassBuilderOptions();
+    if options.is_null() {
+        bail!("failed to create LLVM pass builder options");
+    }
+
+    let err = llvm::LLVMRunPasses(module, pass_pipeline.as_ptr(), target_machine, options);
+    llvm::LLVMDisposePassBuilderOptions(options);
+
+    if !err.is_null() {
+        bail!(
+            "failed to run LLVM optimization passes: {}",
+            llvm_error_ref_to_string(err)
+        );
+    }
+
+    Ok(())
+}
+
 unsafe fn compile_to_object(ops: &[Op], object_path: &Path, opt_level: &OptLevel) -> Result<()> {
     let compiler = LLVMCompiler::new()?;
     compiler.build(ops)?;
@@ -482,21 +746,14 @@ unsafe fn compile_to_object(ops: &[Op], object_path: &Path, opt_level: &OptLevel
     let mut target_err = std::ptr::null_mut();
     if llvm::LLVMGetTargetFromTriple(triple.triple, &mut target, &mut target_err) != 0 {
         let msg = llvm_error_to_string(target_err);
-        llvm::LLVMDisposeMessage(triple.triple);
         bail!("failed to get target from triple: {msg}");
     }
-    let level = match opt_level {
-        OptLevel::O0 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelNone,
-        OptLevel::O1 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelLess,
-        OptLevel::O2 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelDefault,
-        OptLevel::O3 => llvm::LLVMCodeGenOptLevel_LLVMCodeGenLevelAggressive,
-    };
     let tm = LLVMTargetMachine::new(
         target,
         triple.triple,
         cstring(TARGET_CPU)?.as_ptr() as *mut _,
         cstring("")?.as_ptr() as *mut _,
-        level,
+        opt_level.llvm_codegen_level(),
     )?;
 
     llvm::LLVMSetTarget(compiler.module, triple.triple);
@@ -506,6 +763,8 @@ unsafe fn compile_to_object(ops: &[Op], object_path: &Path, opt_level: &OptLevel
     llvm::LLVMSetDataLayout(compiler.module, layout_str);
     llvm::LLVMDisposeMessage(layout_str);
     llvm::LLVMDisposeTargetData(data_layout);
+
+    run_llvm_passes(compiler.module, tm.tm, *opt_level)?;
 
     let mut emit_err = std::ptr::null_mut();
     let object_c = cstring(&object_path.to_string_lossy())?;
@@ -529,12 +788,7 @@ fn link_executable(object_path: &Path, output_path: &Path, opt_level: &OptLevel)
         .arg(object_path)
         .arg("-o")
         .arg(output_path)
-        .arg(match opt_level {
-            OptLevel::O0 => "-O0",
-            OptLevel::O1 => "-O1",
-            OptLevel::O2 => "-O2",
-            OptLevel::O3 => "-O3",
-        })
+        .arg(opt_level.cc_opt_flag())
         .status()
         .context("failed to invoke system C compiler (cc)")?;
 
