@@ -158,10 +158,13 @@ fn optimize_ops(ops: &[Op]) -> anyhow::Result<Vec<Op>> {
     optimize_range(ops, &loop_pairs, 0, ops.len())
 }
 
-pub fn parse_brainfuck(source: &str) -> anyhow::Result<Vec<Op>> {
-    let mut ops = Vec::new();
-    let mut chars = source.as_bytes().iter().copied().peekable();
+pub fn parse_brainfuck<T>(chars: T) -> anyhow::Result<Vec<Op>>
+where
+    T: Iterator<Item = u8>,
+{
+    let mut ops = Vec::with_capacity(chars.size_hint().0 / 2 + 50); // just some heuristic value here
     let mut loop_depth = 0usize;
+    let mut chars = chars.peekable();
 
     while let Some(ch) = chars.next() {
         match ch {

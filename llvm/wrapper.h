@@ -4,6 +4,8 @@
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 #include <llvm-c/Transforms/PassBuilder.h>
+#include <llvm-c/LLJIT.h>
+#include <llvm-c/Orc.h>
 
 void LLVMInitializeAllTargetInfosShim(void);
 void LLVMInitializeAllTargetsShim(void);

@@ -1,43 +1,36 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
-use std::{fs, process::Command};
+use std::{
+    fs,
+    io::{BufReader, Read},
+};
 
 use crate::{
-    llvm::{compile_to_object, link_executable, Cli, OptLevel},
+    args::Cli,
+    llvm::{compile, link_executable},
     parser::parse_brainfuck,
 };
+mod args;
 mod llvm;
 mod parser;
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let source = fs::read_to_string(&cli.input)
-        .with_context(|| format!("failed to read input file: {}", cli.input.display()))?;
-    let ops = parse_brainfuck(&source)?;
+    let source_stream = BufReader::new(
+        fs::File::open(&cli.input)
+            .with_context(|| format!("failed to open input file: {}", cli.input.display()))?,
+    );
+    let ops = parse_brainfuck(source_stream.bytes().filter_map(Result::ok))?;
 
-    let object_path = cli.output.with_extension("o");
-    let opt = cli.opt.unwrap_or(OptLevel::O0);
-    unsafe { compile_to_object(&ops, &object_path, &opt)? };
-    let executable_path = link_executable(&object_path, &cli.output, &opt)?;
-
-    if !cli.keep_obj {
-        let _ = fs::remove_file(&object_path);
-    }
-
-    if cli.run {
-        let full_path = fs::canonicalize(&executable_path).with_context(|| {
-            format!(
-                "failed to canonicalize executable path: {}",
-                executable_path.display()
-            )
-        })?;
-        let status = Command::new(&full_path)
-            .status()
-            .context("failed to run generated executable")?;
-        if !status.success() {
-            bail!("generated executable failed with status {status}");
+    let obj_buf = compile(&ops, &cli.opt, cli.run, cli.output.is_some())?;
+    if let (Some(output), Some(obj_buf)) = (&cli.output, &obj_buf) {
+        let object_path = output.with_extension("o");
+        fs::write(&object_path, obj_buf)?;
+        link_executable(&object_path, output, &cli.opt)?;
+        if !cli.emit_obj {
+            let _ = fs::remove_file(&object_path);
         }
     }
-
     Ok(())
 }
