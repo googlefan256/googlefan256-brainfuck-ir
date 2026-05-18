@@ -15,15 +15,14 @@ fn find_llvm_config() -> anyhow::Result<PathBuf> {
         return Ok(default);
     }
 
-    if cfg!(target_os = "macos") {
-        if let Ok(output) = Command::new("brew").args(["--prefix", "llvm"]).output() {
-            if output.status.success() {
-                let prefix = String::from_utf8(output.stdout)?.trim().to_string();
-                let candidate = Path::new(&prefix).join("bin").join("llvm-config");
-                if candidate.is_file() {
-                    return Ok(candidate);
-                }
-            }
+    if cfg!(target_os = "macos")
+        && let Ok(output) = Command::new("brew").args(["--prefix", "llvm"]).output()
+        && output.status.success()
+    {
+        let prefix = String::from_utf8(output.stdout)?.trim().to_string();
+        let candidate = Path::new(&prefix).join("bin").join("llvm-config");
+        if candidate.is_file() {
+            return Ok(candidate);
         }
     }
 

@@ -20,13 +20,13 @@ pub enum OptLevel {
     O3,
 }
 
-impl Into<BOptLevel> for OptLevel {
-    fn into(self) -> BOptLevel {
-        match self {
-            Self::O0 => BOptLevel::O0,
-            Self::O1 => BOptLevel::O1,
-            Self::O2 => BOptLevel::O2,
-            Self::O3 => BOptLevel::O3,
+impl From<OptLevel> for BOptLevel {
+    fn from(val: OptLevel) -> Self {
+        match val {
+            OptLevel::O0 => BOptLevel::O0,
+            OptLevel::O1 => BOptLevel::O1,
+            OptLevel::O2 => BOptLevel::O2,
+            OptLevel::O3 => BOptLevel::O3,
         }
     }
 }

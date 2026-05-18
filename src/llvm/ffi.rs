@@ -42,16 +42,18 @@ pub fn cstring(s: &str) -> anyhow::Result<CString> {
 
 static ONCE_FN: AtomicBool = AtomicBool::new(false);
 
-unsafe fn initialize_llvm_targets() {
-    LLVMInitializeAllTargetInfosShim();
-    LLVMInitializeAllTargetsShim();
-    LLVMInitializeAllTargetMCsShim();
-    LLVMInitializeAllAsmPrintersShim();
-    LLVMInitializeAllAsmParsersShim();
+fn initialize_llvm_targets() {
+    unsafe {
+        LLVMInitializeAllTargetInfosShim();
+        LLVMInitializeAllTargetsShim();
+        LLVMInitializeAllTargetMCsShim();
+        LLVMInitializeAllAsmPrintersShim();
+        LLVMInitializeAllAsmParsersShim();
+    }
 }
 
 pub fn init() {
     if !ONCE_FN.swap(true, Ordering::AcqRel) {
-        unsafe { initialize_llvm_targets() };
+        initialize_llvm_targets();
     }
 }
