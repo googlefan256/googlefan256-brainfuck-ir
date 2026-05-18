@@ -1,4 +1,4 @@
-use crate::llvm::{ffi, r#trait::AsRaw};
+use crate::llvm::{AsRaw, ffi};
 
 pub struct PassBuilderOptions {
     options: ffi::LLVMPassBuilderOptionsRef,
@@ -14,16 +14,16 @@ impl PassBuilderOptions {
     }
 }
 
+impl AsRaw<ffi::LLVMPassBuilderOptionsRef> for PassBuilderOptions {
+    fn as_raw(&self) -> ffi::LLVMPassBuilderOptionsRef {
+        self.options
+    }
+}
+
 impl Drop for PassBuilderOptions {
     fn drop(&mut self) {
         unsafe {
             ffi::LLVMDisposePassBuilderOptions(self.options);
         }
-    }
-}
-
-impl AsRaw<ffi::LLVMPassBuilderOptionsRef> for PassBuilderOptions {
-    fn as_raw(&self) -> ffi::LLVMPassBuilderOptionsRef {
-        self.options
     }
 }

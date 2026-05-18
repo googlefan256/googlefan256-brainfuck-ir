@@ -1,4 +1,4 @@
-use crate::llvm::{ffi, r#trait::AsRawMut};
+use crate::llvm::{AsRawMut, ffi};
 
 pub struct LLVMMemoryBuffer {
     buf: ffi::LLVMMemoryBufferRef,

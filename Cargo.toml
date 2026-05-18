@@ -1,11 +1,12 @@
 [package]
-name = "brainfuck-ir-rs"
+name = "fastbf"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+repository = "https://github.com/neodyland/brainfuck"
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 [build-dependencies]
 anyhow = "1"
@@ -14,3 +15,7 @@ cc = "1.2.57"
 
 [profile.release]
 strip = true
+
+[features]
+default = ["link"]
+link = []

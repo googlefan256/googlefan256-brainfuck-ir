@@ -4,7 +4,10 @@
 #![allow(non_snake_case)]
 include!(concat!(env!("OUT_DIR"), "/llvm_bindings.rs"));
 
-use std::ffi::{CStr, CString};
+use std::{
+    ffi::{CStr, CString},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 fn from_ptr_string(ptr: *const i8) -> String {
     unsafe { CStr::from_ptr(ptr) }.to_string_lossy().to_string()
@@ -35,4 +38,20 @@ pub fn with_llvm_error(f: impl FnOnce(*mut *mut i8) -> i32) -> anyhow::Result<()
 
 pub fn cstring(s: &str) -> anyhow::Result<CString> {
     CString::new(s).map_err(|_| anyhow::anyhow!("string contains interior NUL: {s:?}"))
+}
+
+static ONCE_FN: AtomicBool = AtomicBool::new(false);
+
+unsafe fn initialize_llvm_targets() {
+    LLVMInitializeAllTargetInfosShim();
+    LLVMInitializeAllTargetsShim();
+    LLVMInitializeAllTargetMCsShim();
+    LLVMInitializeAllAsmPrintersShim();
+    LLVMInitializeAllAsmParsersShim();
+}
+
+pub fn init() {
+    if !ONCE_FN.swap(true, Ordering::AcqRel) {
+        unsafe { initialize_llvm_targets() };
+    }
 }

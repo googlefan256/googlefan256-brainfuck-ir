@@ -1,8 +1,5 @@
-use crate::llvm::{
-    ffi::{self, with_llvm_error},
-    r#trait::AsRaw,
-    triple::LLVMTargetTriple,
-};
+// llvm target doesn't need dispose
+use crate::llvm::{AsRaw, LLVMTargetTriple, ffi};
 
 pub struct LLVMTarget {
     target: ffi::LLVMTargetRef,
@@ -11,7 +8,7 @@ pub struct LLVMTarget {
 impl LLVMTarget {
     pub fn from_triple(triple: &LLVMTargetTriple) -> anyhow::Result<Self> {
         let mut target = std::ptr::null_mut();
-        with_llvm_error(|e| unsafe {
+        ffi::with_llvm_error(|e| unsafe {
             ffi::LLVMGetTargetFromTriple(triple.as_raw(), &mut target, e)
         })
         .map_err(|e| anyhow::anyhow!("failed to get LLVM target from triple: {e}"))?;
